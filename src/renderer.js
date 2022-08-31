@@ -2,17 +2,17 @@
 
 /**
  * Copyright (C) 2022 Jeff Shee (jeffshee8969@gmail.com)
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
@@ -24,14 +24,38 @@ const { Gtk, Gio, GLib, Gdk, GdkX11 } = imports.gi;
 const applicationId = "io.github.jeffshee.hanabi_renderer";
 const isDebugMode = true;
 const waitTime = 500;
+let videos = Gio.File.new_for_path(`${GLib.get_home_dir()}/Wallpapers`).enumerate_children("*", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+if (videos == null) {
+    videos.unref();
+    videos = [];
+}
+videos = [videos]
+    .map((videos) => {
+        const it = [];
+        while (true) {
+            const info = videos.next_file(null);
+
+            if (info == null) break;
+
+            it.push(`/home/arjix/Wallpapers/${info.get_name()}`);
+        }
+        return it;
+    })[0]
+    .map((value) => ({ value, sort: Math.random() }))
+    .sort((a, b) => a.sort - b.sort)
+    .map(({ value }) => value);
+
+if (videos.length == 0) videos = ["video.mp4"];
+
+var videoIndex = 0;
 
 let display = Gdk.Display.open(GLib.getenv("DISPLAY"));
-let isUsingX11 = display.constructor.$gtype.name === 'GdkX11Display'
+let isUsingX11 = display.constructor.$gtype.name === "GdkX11Display";
 let windowed = false;
-let windowConfig = { width: 1920, height: 1080 }
+let windowConfig = { width: 1920, height: 1080 };
 let codePath = "";
 let filePath = "";
-let volume = 1.0;
+let volume = 0.3;
 let muted = false;
 let nohide = false;
 
@@ -40,35 +64,34 @@ let errorFound = false;
 let window = null;
 
 function debug(...args) {
-    if (isDebugMode)
-        print(...args)
+    if (isDebugMode) print(...args);
 }
 
 function parseCommandLine(argv) {
     for (let arg of argv) {
         if (!lastCommand) {
             switch (arg) {
-                case '-M':
-                case '--muted':
+                case "-M":
+                case "--muted":
                     muted = true;
                     debug(`muted = ${muted}`);
                     break;
-                case '-N':
-                case '--nohide':
+                case "-N":
+                case "--nohide":
                     // Launch renderer in standalone mode without hiding
-                    nohide = true
+                    nohide = true;
                     debug(`nohide = ${nohide}`);
                     break;
-                case '-D':
-                case '--display':
-                case '-W':
-                case '--windowed':
-                case '-P':
-                case '--codepath':
-                case '-F':
-                case '--filepath':
-                case '-V':
-                case '--volume':
+                case "-D":
+                case "--display":
+                case "-W":
+                case "--windowed":
+                case "-P":
+                case "--codepath":
+                // case "-F":
+                // case "--filepath":
+                case "-V":
+                case "--volume":
                     lastCommand = arg;
                     break;
                 default:
@@ -79,8 +102,8 @@ function parseCommandLine(argv) {
             continue;
         }
         switch (lastCommand) {
-            case '-D':
-            case '--display':
+            case "-D":
+            case "--display":
                 let displayIndex = parseInt(arg);
                 debug(`display = ${displayIndex}`);
                 let displays = Gdk.DisplayManager.get().list_displays();
@@ -90,35 +113,34 @@ function parseCommandLine(argv) {
                 }
                 display = displays[displayIndex];
                 break;
-            case '-W':
-            case '--windowed':
+            case "-W":
+            case "--windowed":
                 windowed = true;
                 let data = arg.split(":");
                 windowConfig = {
                     width: parseInt(data[0]),
                     height: parseInt(data[1]),
-                }
+                };
                 debug(`windowed = ${windowed}, windowConfig = ${windowConfig}`);
                 break;
-            case '-P':
-            case '--codepath':
+            case "-P":
+            case "--codepath":
                 codePath = arg;
                 debug(`codepath = ${codePath}`);
                 break;
-            case '-F':
-            case '--filepath':
-                filePath = arg;
-                debug(`filepath = ${filePath}`);
-                break;
-            case '-V':
-            case '--volume':
+            // case "-F":
+            // case "--filepath":
+            //     filePath = arg;
+            //     debug(`filepath = ${filePath}`);
+            //     break;
+            case "-V":
+            case "--volume":
                 volume = Math.max(0.0, Math.min(1.0, parseFloat(arg)));
                 debug(`volume = ${volume}`);
                 break;
         }
         lastCommand = null;
-        if (errorFound)
-            break;
+        if (errorFound) break;
     }
 }
 
@@ -135,64 +157,63 @@ class VideoWallpaperWindow {
         Gtk.StyleContext.add_provider_for_display(display, cssProvider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
 
+    prepareMedia() {
+        this._box = new Gtk.Box({
+            halign: Gtk.Align.FILL,
+            valign: Gtk.Align.FILL,
+        });
+
+        this._media = Gtk.MediaFile.new_for_filename(videos[videoIndex]);
+        this._media.connect("notify::prepared", () => {
+            this.setVolume(volume);
+            this.setMuted(muted);
+        });
+        this._media.play();
+
+        this._picture = new Gtk.Picture({ paintable: this._media });
+
+        this._box.append(this._picture);
+        this._box.show();
+
+        this._window.set_child(this._box);
+        this._media.connect("notify::ended", () => {
+            if (!this._media.ended) return;
+            if (videoIndex++ >= videos.length) videoIndex = 0;
+            this.prepareMedia();
+        });
+    }
+
     _buildUI() {
         this._window = new Gtk.ApplicationWindow({
             application: this._app,
-            title: nohide? "Hanabi Renderer": `@${applicationId}!0,0;H`,
+            title: nohide ? "Hanabi Renderer" : `@${applicationId}!0,0;H`,
             defaultHeight: windowConfig.height,
             defaultWidth: windowConfig.width,
             fullscreened: !windowed,
             display: display,
-            decorated: nohide? true : false ,
+            decorated: nohide ? true : false,
         });
 
         // Transparent* (opacity=0.01) window background
         this._windowContext = this._window.get_style_context();
         this._windowContext.add_class("desktopwindow");
 
-        this._box = new Gtk.Box({
-            halign: Gtk.Align.FILL,
-            valign: Gtk.Align.FILL,
-        });
-
-        // The constructor of MediaFile doesn't work in gjs.
-        // Have to call the `new_for_xxx` function here.
-        this._media = Gtk.MediaFile.new_for_filename(filePath);
-        this._media.set({
-            loop: true,
-        })
-        // Set the volume and muted after prepared, otherwise it won't work.
-        this._media.connect("notify::prepared", () => {
-            this.setVolume(volume);
-            this.setMuted(muted)
-        })
-        this._media.play();
-
-        this._picture = new Gtk.Picture({
-            paintable: this._media,
-        });
-
-        this._box.append(this._picture);
-        this._box.show();
-
-        this._window.set_child(this._box);
+        this.prepareMedia();
     }
 
     /**
      * These workarounds are needed because get_volume() and get_muted() can be wrong in some cases.
-     * If the current value is equal to the new value, the changes will be skipped. 
+     * If the current value is equal to the new value, the changes will be skipped.
      * Avoid this behavior by resetting the current value to null before setting the new value.
      */
     setVolume(volume) {
-        if (this._media.volume == volume)
-            this._media.volume = null
-        this._media.volume = volume
+        if (this._media.volume == volume) this._media.volume = null;
+        this._media.volume = volume;
     }
 
     setMuted(muted) {
-        if (this._media.muted == muted)
-            this._media.muted = null
-        this._media.muted = muted
+        if (this._media.muted == muted) this._media.muted = null;
+        this._media.muted = muted;
     }
 
     getWidget() {
@@ -227,20 +248,20 @@ renderer.connect("activate", (app) => {
     } else {
         /**
          * Hiding mechanism of the renderer
-         * 
-         * TBH I'm not too fond of the current hiding approach. 
+         *
+         * TBH I'm not too fond of the current hiding approach.
          * It is too hacky, and I'm afraid it might break someday.
-         * The idea though is simple; skip the taskbar + minimize the window (problematic). 
+         * The idea though is simple; skip the taskbar + minimize the window (problematic).
          * Then the window should look like it doesn't exist at all.
-         * It is very important to make sure that the compositor **actually** draws the hidden window properly. 
+         * It is very important to make sure that the compositor **actually** draws the hidden window properly.
          * Otherwise, the window preview (shown as background by gnome-extension) will not be animated.
-         * 
+         *
          * Based on my experiments,
          * 1. Minimize > show: preview not animated
          * 2. Show > minimize: preview not animated
          * 3. Minimize > present: window moved to front, minimize not work, preview animated
          * 4. Present > minimize: window moved to front, minimize work (glitch), preview animated (glitch if preview is created too early)
-         * 5. Opacity=0 > present > (500ms delay) > minimize > opacity=1: 
+         * 5. Opacity=0 > present > (500ms delay) > minimize > opacity=1:
          *       minimize work, preview animated (glitch if preview is created too early)
          */
 
@@ -270,9 +291,7 @@ renderer.connect("command-line", (app, commandLine) => {
     if (!errorFound) {
         renderer.activate();
         commandLine.set_exit_status(0);
-    }
-    else
-        commandLine.set_exit_status(1);
+    } else commandLine.set_exit_status(1);
 });
 
 renderer.run(ARGV);
